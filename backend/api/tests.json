@@ -1,0 +1,41 @@
+{
+  "tests": [
+    {
+      "name": "Get leaderboard",
+      "method": "GET",
+      "path": "/?endpoint=leaderboard",
+      "expectedStatus": 200,
+      "expectedBody": [],
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Admin login with correct password",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "action": "admin_login",
+        "password": "Damoix1"
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "success": true,
+        "token": "string"
+      },
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Admin login with incorrect password",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "action": "admin_login",
+        "password": "wrong"
+      },
+      "expectedStatus": 401,
+      "expectedBody": {
+        "success": false
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
