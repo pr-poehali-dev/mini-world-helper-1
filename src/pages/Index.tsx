@@ -5,7 +5,6 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
 import Icon from '@/components/ui/icon';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -28,9 +27,38 @@ interface PlayerData {
   channel_joined: boolean;
 }
 
+interface Withdrawal {
+  id: number;
+  player_id: string;
+  player_name: string;
+  amount: number;
+  account_id: string;
+  status: string;
+  created_at: string;
+}
+
+interface SupportMessage {
+  id: number;
+  player_id: string;
+  player_name: string;
+  message: string;
+  status: string;
+  created_at: string;
+}
+
+interface AllPlayer {
+  player_id: string;
+  name: string;
+  beans: number;
+  total_earned: number;
+  total_withdrawn: number;
+  created_at: string;
+}
+
 const Index = () => {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('profile');
+  const [adminTab, setAdminTab] = useState('players');
   const [playerId, setPlayerId] = useState<string>('');
   const [playerData, setPlayerData] = useState<PlayerData | null>(null);
   const [topPlayers, setTopPlayers] = useState<Player[]>([]);
@@ -43,6 +71,10 @@ const Index = () => {
   const [showAdminDialog, setShowAdminDialog] = useState(false);
   const [targetPlayerId, setTargetPlayerId] = useState('');
   const [adminAmount, setAdminAmount] = useState('');
+  
+  const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
+  const [messages, setMessages] = useState<SupportMessage[]>([]);
+  const [allPlayers, setAllPlayers] = useState<AllPlayer[]>([]);
 
   useEffect(() => {
     const storedPlayerId = localStorage.getItem('player_id');
@@ -69,6 +101,12 @@ const Index = () => {
       loadPlayerData();
     }
   }, [playerId]);
+
+  useEffect(() => {
+    if (isAdmin && adminToken) {
+      loadAdminData();
+    }
+  }, [isAdmin, adminToken, adminTab]);
 
   const verifyAdmin = async (token: string) => {
     try {
@@ -110,6 +148,47 @@ const Index = () => {
       setTopPlayers(data);
     } catch (error) {
       console.error('Failed to load leaderboard:', error);
+    }
+  };
+
+  const loadAdminData = async () => {
+    try {
+      if (adminTab === 'withdrawals') {
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Admin-Token': adminToken,
+          },
+          body: JSON.stringify({ action: 'admin_get_withdrawals' }),
+        });
+        const data = await response.json();
+        setWithdrawals(data);
+      } else if (adminTab === 'messages') {
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Admin-Token': adminToken,
+          },
+          body: JSON.stringify({ action: 'admin_get_messages' }),
+        });
+        const data = await response.json();
+        setMessages(data);
+      } else if (adminTab === 'players') {
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Admin-Token': adminToken,
+          },
+          body: JSON.stringify({ action: 'admin_get_all_players' }),
+        });
+        const data = await response.json();
+        setAllPlayers(data);
+      }
+    } catch (error) {
+      console.error('Failed to load admin data:', error);
     }
   };
 
@@ -173,36 +252,6 @@ const Index = () => {
     }
   };
 
-  const handleJoinChannel = async () => {
-    window.open('https://t.me/miniworld_beans', '_blank');
-    
-    setTimeout(async () => {
-      toast({ title: '🎉 Отлично!', description: 'Проверяем вступление в канал...' });
-      
-      try {
-        const response = await fetch(API_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Player-Id': playerId,
-          },
-          body: JSON.stringify({ action: 'join_channel' }),
-        });
-        const data = await response.json();
-
-        if (data.success) {
-          toast({ title: '💰 +50 мини бобов!', description: 'Награда за вступление в канал получена' });
-          await loadPlayerData();
-          await loadLeaderboard();
-        } else {
-          toast({ title: 'ℹ️ Информация', description: data.error });
-        }
-      } catch (error) {
-        toast({ title: '❌ Ошибка', description: 'Не удалось получить награду', variant: 'destructive' });
-      }
-    }, 2000);
-  };
-
   const handleSendQuestion = async () => {
     if (!question.trim()) {
       toast({ title: '❌ Ошибка', description: 'Напишите ваш вопрос', variant: 'destructive' });
@@ -225,9 +274,8 @@ const Index = () => {
     }
   };
 
-  const handleAdminUpdate = async () => {
-    const amount = parseInt(adminAmount);
-    if (!targetPlayerId || !amount) {
+  const handleAdminUpdate = async (targetId: string, amount: number) => {
+    if (!targetId || !amount) {
       toast({ title: '❌ Ошибка', description: 'Укажите ID игрока и сумму', variant: 'destructive' });
       return;
     }
@@ -239,19 +287,20 @@ const Index = () => {
           'Content-Type': 'application/json',
           'X-Admin-Token': adminToken,
         },
-        body: JSON.stringify({ action: 'admin_update_balance', target_player_id: targetPlayerId, amount }),
+        body: JSON.stringify({ action: 'admin_update_balance', target_player_id: targetId, amount }),
       });
       const data = await response.json();
 
       if (data.success) {
         toast({ 
           title: '✅ Баланс обновлен', 
-          description: `Игроку ${targetPlayerId} ${amount > 0 ? 'начислено' : 'списано'} ${Math.abs(amount)} бобов` 
+          description: `${amount > 0 ? 'Начислено' : 'Списано'} ${Math.abs(amount)} бобов` 
         });
         setTargetPlayerId('');
         setAdminAmount('');
         await loadLeaderboard();
-        if (targetPlayerId === playerId) {
+        await loadAdminData();
+        if (targetId === playerId) {
           await loadPlayerData();
         }
       } else {
@@ -364,31 +413,6 @@ const Index = () => {
                   <span className="font-bold text-lg text-primary">{playerData?.beans || 0} 🫘</span>
                 </div>
               </div>
-
-              {!playerData?.channel_joined && (
-                <Card className="p-4 bg-gradient-to-br from-accent/20 to-primary/10 border-accent/30">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-1">
-                        <h4 className="font-bold text-lg">Вступи в канал</h4>
-                        <p className="text-sm text-muted-foreground">
-                          Присоединяйся к нашему Telegram каналу
-                        </p>
-                      </div>
-                      <div className="text-3xl font-bold text-accent">+50</div>
-                    </div>
-                    <Progress value={0} className="h-2" />
-                    <Button
-                      onClick={handleJoinChannel}
-                      className="w-full bg-accent hover:bg-accent/90"
-                      size="lg"
-                    >
-                      <Icon name="Users" size={20} className="mr-2" />
-                      Вступить в канал
-                    </Button>
-                  </div>
-                </Card>
-              )}
             </Card>
 
             <Card className="p-6 space-y-4 bg-card/80 backdrop-blur-sm">
@@ -505,36 +529,126 @@ const Index = () => {
               <Icon name="Shield" size={24} className="text-destructive" />
               <h3 className="text-xl font-bold text-destructive">Админ панель</h3>
             </div>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">ID игрока (player_id)</label>
-                <Input
-                  placeholder="Введите player_id из базы"
-                  value={targetPlayerId}
-                  onChange={(e) => setTargetPlayerId(e.target.value)}
-                  className="bg-background/50"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Изменить баланс</label>
-                <Input
-                  type="number"
-                  placeholder="+100 или -50"
-                  value={adminAmount}
-                  onChange={(e) => setAdminAmount(e.target.value)}
-                  className="bg-background/50"
-                />
-              </div>
-              <Button
-                onClick={handleAdminUpdate}
-                variant="destructive"
-                className="w-full"
-                size="lg"
-              >
-                <Icon name="Zap" size={20} className="mr-2" />
-                Обновить баланс
-              </Button>
-            </div>
+
+            <Tabs value={adminTab} onValueChange={setAdminTab} className="w-full">
+              <TabsList className="grid w-full grid-cols-3 h-auto gap-2 bg-card/50 p-2">
+                <TabsTrigger value="players" className="flex flex-col gap-1 py-2">
+                  <Icon name="Users" size={18} />
+                  <span className="text-xs">Игроки</span>
+                </TabsTrigger>
+                <TabsTrigger value="withdrawals" className="flex flex-col gap-1 py-2">
+                  <Icon name="ArrowDownToLine" size={18} />
+                  <span className="text-xs">Выводы</span>
+                </TabsTrigger>
+                <TabsTrigger value="messages" className="flex flex-col gap-1 py-2">
+                  <Icon name="MessageCircle" size={18} />
+                  <span className="text-xs">Сообщения</span>
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="players" className="space-y-4 mt-4">
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {allPlayers.map((player) => (
+                    <Card key={player.player_id} className="p-4 bg-background/50">
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-bold">{player.name}</p>
+                            <p className="text-xs text-muted-foreground">{player.player_id}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-bold text-lg">{player.beans} 🫘</p>
+                            <p className="text-xs text-muted-foreground">
+                              Заработано: {player.total_earned} | Выведено: {player.total_withdrawn}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Input
+                            type="number"
+                            placeholder="+100 или -50"
+                            className="flex-1"
+                            onKeyPress={(e) => {
+                              if (e.key === 'Enter') {
+                                const input = e.currentTarget;
+                                handleAdminUpdate(player.player_id, parseInt(input.value));
+                                input.value = '';
+                              }
+                            }}
+                          />
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={(e) => {
+                              const input = e.currentTarget.previousElementSibling as HTMLInputElement;
+                              handleAdminUpdate(player.player_id, parseInt(input.value));
+                              input.value = '';
+                            }}
+                          >
+                            <Icon name="Check" size={16} />
+                          </Button>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="withdrawals" className="space-y-4 mt-4">
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {withdrawals.length > 0 ? withdrawals.map((withdrawal) => (
+                    <Card key={withdrawal.id} className="p-4 bg-background/50">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-bold">{withdrawal.player_name}</p>
+                            <p className="text-xs text-muted-foreground">{withdrawal.player_id}</p>
+                          </div>
+                          <Badge variant={withdrawal.status === 'pending' ? 'default' : 'secondary'}>
+                            {withdrawal.status}
+                          </Badge>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span>Сумма: <strong>{withdrawal.amount} 🫘</strong></span>
+                          <span>ID аккаунта: <strong>{withdrawal.account_id}</strong></span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(withdrawal.created_at).toLocaleString('ru-RU')}
+                        </p>
+                      </div>
+                    </Card>
+                  )) : (
+                    <p className="text-center text-muted-foreground py-8">Нет выводов</p>
+                  )}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="messages" className="space-y-4 mt-4">
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {messages.length > 0 ? messages.map((message) => (
+                    <Card key={message.id} className="p-4 bg-background/50">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-bold">{message.player_name}</p>
+                            <p className="text-xs text-muted-foreground">{message.player_id}</p>
+                          </div>
+                          <Badge variant={message.status === 'new' ? 'default' : 'secondary'}>
+                            {message.status === 'new' ? 'Новое' : 'Прочитано'}
+                          </Badge>
+                        </div>
+                        <p className="text-sm bg-muted/30 p-3 rounded">{message.message}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(message.created_at).toLocaleString('ru-RU')}
+                        </p>
+                      </div>
+                    </Card>
+                  )) : (
+                    <p className="text-center text-muted-foreground py-8">Нет сообщений</p>
+                  )}
+                </div>
+              </TabsContent>
+            </Tabs>
           </Card>
         )}
 

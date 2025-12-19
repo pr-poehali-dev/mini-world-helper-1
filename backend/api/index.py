@@ -129,39 +129,6 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     'isBase64Encoded': False
                 }
             
-            elif action == 'join_channel' and player_id:
-                cursor.execute('''
-                    UPDATE players 
-                    SET channel_joined = TRUE, beans = beans + 50, 
-                        total_earned = total_earned + 50,
-                        updated_at = NOW()
-                    WHERE player_id = %s AND channel_joined = FALSE
-                    RETURNING beans
-                ''', (player_id,))
-                result = cursor.fetchone()
-                conn.commit()
-                
-                if result:
-                    cursor.execute('''
-                        INSERT INTO transactions (player_id, type, amount, description)
-                        VALUES (%s, %s, %s, %s)
-                    ''', (player_id, 'earn', 50, 'Вступление в канал'))
-                    conn.commit()
-                    
-                    return {
-                        'statusCode': 200,
-                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                        'body': json.dumps({'success': True, 'beans': result['beans']}),
-                        'isBase64Encoded': False
-                    }
-                else:
-                    return {
-                        'statusCode': 400,
-                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                        'body': json.dumps({'success': False, 'error': 'Награда уже получена'}),
-                        'isBase64Encoded': False
-                    }
-            
             elif action == 'withdraw' and player_id:
                 amount = body_data.get('amount', 0)
                 account_id = body_data.get('account_id')
@@ -193,6 +160,12 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 ''', (player_id, 'withdraw', -amount, f'Вывод на аккаунт {account_id}'))
                 conn.commit()
                 
+                cursor.execute('''
+                    INSERT INTO withdrawals (player_id, amount, account_id, status)
+                    VALUES (%s, %s, %s, %s)
+                ''', (player_id, amount, account_id, 'pending'))
+                conn.commit()
+                
                 return {
                     'statusCode': 200,
                     'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
@@ -201,27 +174,115 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 }
             
             elif action == 'send_question' and player_id:
-                question = body_data.get('question', '')
+                question = body_data.get('question')
+                
+                cursor.execute('''
+                    INSERT INTO support_messages (player_id, message, status)
+                    VALUES (%s, %s, %s)
+                ''', (player_id, question, 'new'))
+                conn.commit()
                 
                 return {
                     'statusCode': 200,
                     'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                    'body': json.dumps({'success': True, 'message': 'Вопрос отправлен администратору'}),
+                    'body': json.dumps({'success': True}),
                     'isBase64Encoded': False
                 }
             
-            elif action == 'admin_update_balance':
+            elif action == 'admin_get_withdrawals' and admin_token:
                 cursor.execute('''
                     SELECT * FROM admin_sessions 
                     WHERE session_token = %s AND expires_at > NOW()
                 ''', (admin_token,))
-                session = cursor.fetchone()
-                
-                if not session:
+                if not cursor.fetchone():
                     return {
                         'statusCode': 401,
                         'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                        'body': json.dumps({'success': False, 'error': 'Доступ запрещен'}),
+                        'body': json.dumps({'success': False, 'error': 'Неверный токен'}),
+                        'isBase64Encoded': False
+                    }
+                
+                cursor.execute('''
+                    SELECT w.*, p.name as player_name
+                    FROM withdrawals w
+                    LEFT JOIN players p ON w.player_id = p.player_id
+                    ORDER BY w.created_at DESC
+                    LIMIT 100
+                ''')
+                withdrawals = cursor.fetchall()
+                
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps([dict(w) for w in withdrawals], default=str),
+                    'isBase64Encoded': False
+                }
+            
+            elif action == 'admin_get_messages' and admin_token:
+                cursor.execute('''
+                    SELECT * FROM admin_sessions 
+                    WHERE session_token = %s AND expires_at > NOW()
+                ''', (admin_token,))
+                if not cursor.fetchone():
+                    return {
+                        'statusCode': 401,
+                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                        'body': json.dumps({'success': False, 'error': 'Неверный токен'}),
+                        'isBase64Encoded': False
+                    }
+                
+                cursor.execute('''
+                    SELECT sm.*, p.name as player_name
+                    FROM support_messages sm
+                    LEFT JOIN players p ON sm.player_id = p.player_id
+                    ORDER BY sm.created_at DESC
+                    LIMIT 100
+                ''')
+                messages = cursor.fetchall()
+                
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps([dict(m) for m in messages], default=str),
+                    'isBase64Encoded': False
+                }
+            
+            elif action == 'admin_get_all_players' and admin_token:
+                cursor.execute('''
+                    SELECT * FROM admin_sessions 
+                    WHERE session_token = %s AND expires_at > NOW()
+                ''', (admin_token,))
+                if not cursor.fetchone():
+                    return {
+                        'statusCode': 401,
+                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                        'body': json.dumps({'success': False, 'error': 'Неверный токен'}),
+                        'isBase64Encoded': False
+                    }
+                
+                cursor.execute('''
+                    SELECT * FROM players
+                    ORDER BY created_at DESC
+                ''')
+                players = cursor.fetchall()
+                
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps([dict(p) for p in players], default=str),
+                    'isBase64Encoded': False
+                }
+            
+            elif action == 'admin_update_balance' and admin_token:
+                cursor.execute('''
+                    SELECT * FROM admin_sessions 
+                    WHERE session_token = %s AND expires_at > NOW()
+                ''', (admin_token,))
+                if not cursor.fetchone():
+                    return {
+                        'statusCode': 401,
+                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                        'body': json.dumps({'success': False, 'error': 'Неверный токен'}),
                         'isBase64Encoded': False
                     }
                 
@@ -241,13 +302,13 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     cursor.execute('''
                         INSERT INTO transactions (player_id, type, amount, description)
                         VALUES (%s, %s, %s, %s)
-                    ''', (target_player_id, 'admin', amount, f'Изменение администратором'))
+                    ''', (target_player_id, 'admin', amount, f'Изменение администратором: {amount}'))
                     conn.commit()
                     
                     return {
                         'statusCode': 200,
                         'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                        'body': json.dumps({'success': True, 'beans': result['beans']}),
+                        'body': json.dumps({'success': True, 'new_balance': result['beans']}),
                         'isBase64Encoded': False
                     }
                 else:
